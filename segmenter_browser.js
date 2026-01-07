@@ -288,6 +288,7 @@ export class KhmerSegmenter {
         if (code === 0x17DB) return true;
 
         if (/\p{P}|\p{S}|\p{Z}/u.test(char)) return true; // Unicode properties P, S, Z
+        if (/\s/.test(char)) return true; // Catch-all for whitespace including \n, \r, \t which might not be in Z
 
         return false;
     }

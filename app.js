@@ -368,11 +368,14 @@ modeToggle.addEventListener('change', (e) => {
     isViewMode = e.target.checked;
 
     if (isViewMode) {
-        editor.contentEditable = "false";
+        // Capture text from Edit Mode BEFORE applying View Mode styles (which makes spans flex items)
+        // This prevents innerText from inserting newlines between words due to flex layout
+        const currentText = editor.innerText;
+
         editor.contentEditable = "false";
         editor.classList.add("view-mode");
         // Ensure we segment fresh content when entering view mode
-        performRealTimeSegmentation();
+        performRealTimeSegmentation(currentText);
     } else {
         editor.contentEditable = "true";
         editor.classList.remove("view-mode");
@@ -621,9 +624,9 @@ function setCaretPosition(element, offset) {
 
 
 // Real-time Segmentation
-async function performRealTimeSegmentation() {
+async function performRealTimeSegmentation(textOverride = null) {
     // Real-time: use single worker only, NOT batch mode (which uses 4 workers)
-    const fullText = editor.innerText;
+    const fullText = textOverride !== null ? textOverride : editor.innerText;
 
     // Use a single worker for lighter processing
     const worker = getNextWorker();
