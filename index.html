@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Khmer Segmenter | Premium</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Serif+Khmer:wght@400;500;600&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <header>
+            <h1>Khmer Segmenter</h1>
+            <p class="subtitle">High-performance browser-based text segmentation</p>
+        </header>
+
+        <main>
+            <div class="editor-container">
+                <div class="editor-header">
+                    <div class="header-controls">
+                        <!-- Status moved to bottom -->
+                        <div class="toggle-container">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="mode-toggle">
+                                <span class="slider round"></span>
+                            </label>
+                            <span class="toggle-label">មើលលទ្ធផល</span>
+                        </div>
+                    </div>
+                    <div class="editor-controls">
+                        <button id="btn-download" class="btn btn-secondary">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                                viewBox="0 0 16 16">
+                                <path
+                                    d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z" />
+                                <path
+                                    d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z" />
+                            </svg>
+                            ទាញយកលទ្ធផល
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Fixed size editor -->
+                <div id="editor" class="editor" contenteditable="true" spellcheck="false"
+                    placeholder="វាយអត្ថបទខ្មែរនៅទីនេះ..."></div>
+
+                <div class="stats-bar">
+                    <span class="status-indicator" id="status-indicator">រួចរាល់</span>
+
+                    <div class="stats-right-group">
+                        <div class="nav-controls" id="nav-controls">
+                            <button id="btn-prev-unknown" class="btn-icon" title="ពាក្យមិនស្គាល់មុន">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                                    viewBox="0 0 16 16">
+                                    <path fill-rule="evenodd"
+                                        d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0z" />
+                                </svg>
+                            </button>
+                            <span id="nav-status">0/0</span>
+                            <button id="btn-next-unknown" class="btn-icon" title="ពាក្យមិនស្គាល់បន្ទាប់">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                                    viewBox="0 0 16 16">
+                                    <path fill-rule="evenodd"
+                                        d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="stats-counts">
+                            <span id="word-count">0 ពាក្យ</span>
+                            <span id="unknown-count" class="unknown-stat">0 ពាក្យមិនស្គាល់</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Powered by Web Workers & Dictionary-based Segmentation</p>
+            <p style="margin-top: 0.5rem; font-size: 0.8rem;">
+                Developed by <a href="https://github.com/Sovichea/khmer_segmenter" target="_blank"
+                    style="color: var(--accent); text-decoration: none;">Sovichea Tep</a>
+            </p>
+        </footer>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+
+</html>
