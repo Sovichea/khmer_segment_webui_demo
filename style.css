@@ -206,7 +206,10 @@ h1 {
 }
 
 .segment-box {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
     padding: 2px 6px;
     border: 1px solid var(--border);
     border-radius: 4px;
