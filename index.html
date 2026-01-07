@@ -32,6 +32,8 @@
                             </label>
                             <span class="toggle-label">មើលលទ្ធផល</span>
                         </div>
+                        <span id="benchmark-display"
+                            style="color: var(--text-secondary); font-size: 0.9rem; margin-left: auto;"></span>
                     </div>
                     <div class="editor-controls">
                         <button id="btn-download" class="btn btn-secondary">
@@ -48,8 +50,11 @@
                 </div>
 
                 <!-- Fixed size editor -->
-                <div id="editor" class="editor" contenteditable="true" spellcheck="false"
-                    placeholder="វាយអត្ថបទខ្មែរនៅទីនេះ..."></div>
+                <!-- Fixed size editor -->
+                <div class="editor-wrapper">
+                    <div id="editor" class="editor" contenteditable="true" spellcheck="false"
+                        placeholder="វាយអត្ថបទខ្មែរនៅទីនេះ..."></div>
+                </div>
 
                 <div class="stats-bar">
                     <span class="status-indicator" id="status-indicator">រួចរាល់</span>

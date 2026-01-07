@@ -1,675 +1,502 @@
-const workerCount = 4;
-const workers = [];
-const workerStatus = Array(workerCount).fill(false); // true if ready
-let nextWorkerIndex = 0;
-const statusIndicator = document.getElementById('status-indicator');
-const editor = document.getElementById('editor');
-const btnDownload = document.getElementById('btn-download');
-const wordCount = document.getElementById('word-count');
-const unknownCount = document.getElementById('unknown-count');
 
-// Initialize Workers
-for (let i = 0; i < workerCount; i++) {
-    const worker = new Worker('worker.js', { type: 'module' });
+// State
+const state = {
+    editText: '', // Content in Edit Mode
+    segmentedResult: [], // Array of word objects {word, isUnknown}
+    isSegmenting: false,
+    unknownWords: [], // Array of indices in segmentedResult
+    currentUnknownIndex: -1,
+    mode: 'edit', // 'edit' or 'view'
+    lastSegmentedText: '' // specific snapshot that was segmented
+};
 
-    worker.onmessage = (e) => {
-        const { type, id, result } = e.data;
+// UI Elements
+const els = {
+    editor: document.getElementById('editor'),
+    modeToggle: document.getElementById('mode-toggle'),
+    statusIndicator: document.getElementById('status-indicator'),
+    wordCount: document.getElementById('word-count'),
+    unknownCount: document.getElementById('unknown-count'),
+    navControls: document.getElementById('nav-controls'),
+    navStatus: document.getElementById('nav-status'),
+    btnPrev: document.getElementById('btn-prev-unknown'),
+    btnNext: document.getElementById('btn-next-unknown'),
+    btnDownload: document.getElementById('btn-download')
+};
 
-        if (type === 'ready') {
-            workerStatus[i] = true;
-            checkAllReady();
-        } else if (type === 'result') {
-            handleWorkerResult(id, result);
-        } else if (type === 'error') {
-            console.error(`Worker ${i} error:`, e.data.error);
+
+// Worker Pool
+class WorkerPool {
+    constructor(size = 4) {
+        this.size = size;
+        this.workers = [];
+        this.queue = [];
+        this.ready = false;
+        this.init();
+    }
+
+    init() {
+        let loadedCount = 0;
+        for (let i = 0; i < this.size; i++) {
+            const worker = new Worker('worker.js', { type: 'module' });
+            worker.onmessage = (e) => {
+                const { type } = e.data;
+                if (type === 'ready') {
+                    loadedCount++;
+                    if (loadedCount === this.size) {
+                        this.ready = true;
+                        updateStatus('រួចរាល់', 'success');
+                    }
+                }
+            };
+            this.workers.push(worker);
         }
-    };
+    }
 
-    workers.push(worker);
-}
+    async segment(text) {
+        if (!this.ready) return [];
+        // Split text by newlines to preserve structure and parallelize
+        // We use a regex dealing with various newline formats
+        const lines = text.split(/(\r\n|\r|\n)/g);
+        // split with capture enables us to keep the delimiters, so we can reassemble perfectly.
 
-function checkAllReady() {
-    if (workerStatus.every(s => s)) {
-        statusIndicator.textContent = "រួចរាល់";
-        statusIndicator.classList.remove("processing");
-    } else {
-        statusIndicator.textContent = `កំពុងផ្ទុក... (${workerStatus.filter(s => s).length}/${workerCount})`;
-        statusIndicator.classList.add("processing");
+        const promises = lines.map((line) => {
+            // We only process actual content, but we need to preserve the separators too.
+            // However, our worker splits words. A newline is effectively a separator.
+            // So we dispatch "content" lines to workers, and wrap separators as "words" directly.
+
+            if (/^(\r\n|\r|\n)$/.test(line)) {
+                // It's a newline
+                return Promise.resolve([{ word: line, isUnknown: false }]);
+            }
+            if (!line) return Promise.resolve([]);
+            return this._runWorker(line);
+        });
+
+        const results = await Promise.all(promises);
+        return results.flat();
+    }
+
+    _runWorker(text) {
+        return new Promise((resolve, reject) => {
+            const worker = this.workers[Math.floor(Math.random() * this.workers.length)];
+            const id = Math.random().toString(36).substr(2, 9);
+
+            const handler = (e) => {
+                const { type, id: msgId, result, error } = e.data;
+                if (msgId !== id) return; // Not our message
+
+                worker.removeEventListener('message', handler);
+
+                if (type === 'result') resolve(result);
+                else reject(error);
+            };
+
+            worker.addEventListener('message', handler);
+            worker.postMessage({ type: 'segment', text, id });
+        });
     }
 }
 
-// Segmentation State
-let activeRequestId = 0;
-let isViewMode = false;
-let currentWords = []; // Cache for re-rendering
+const pool = new WorkerPool(4);
 
-// History Manager for Undo/Redo
-const historyManager = {
-    stack: [],
-    currentIndex: -1,
-    maxSize: 50,
+// Debounce
+function debounce(func, wait) {
+    let timeout;
+    return function (...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func(...args), wait);
+    };
+}
 
-    push(state) {
-        // Remove redo history if we are in middle of stack
-        if (this.currentIndex < this.stack.length - 1) {
-            this.stack = this.stack.slice(0, this.currentIndex + 1);
+function updateStatus(text, type = 'normal') {
+    els.statusIndicator.textContent = text;
+    els.statusIndicator.className = 'status-indicator ' + type;
+}
+
+// ----------------------------------------------------
+// CORE LOGIC with Highlight API
+// ----------------------------------------------------
+
+const runSegmentation = async () => {
+    // Current text in editor
+    const text = els.editor.innerText;
+
+    if (text === state.lastSegmentedText && state.segmentedResult.length > 0 && state.mode === 'edit') {
+        // Just re-hightlight incase DOM changed but text didn't? 
+        // Or return. Ideally return.
+        // But if we just switched modes, we might need to re-apply highlights?
+    }
+
+    state.isSegmenting = true;
+    updateStatus('កំពុងដំណើរការ...', 'warning');
+
+    const startTime = performance.now();
+
+    try {
+        const results = await pool.segment(text);
+        const endTime = performance.now();
+        const durationSec = (endTime - startTime) / 1000;
+
+        state.segmentedResult = results;
+        state.lastSegmentedText = text;
+        state.isSegmenting = false;
+
+        // Analyze
+        state.unknownWords = [];
+        let wordCount = 0;
+        let unknownCount = 0;
+
+        results.forEach((item, index) => {
+            if (!item.word) return;
+            // Trim check for word count? Or count all tokens? Usually word count ignores whitespace.
+            // Let's count non-whitespace tokens as words.
+            if (!/^[\s\n\r]*$/.test(item.word)) {
+                wordCount++;
+            }
+            if (item.isUnknown) {
+                unknownCount++;
+                state.unknownWords.push(index);
+            }
+        });
+
+        // Benchmark
+        if (durationSec > 0 && wordCount > 0) {
+            const kWordsPerSec = (wordCount / 1000) / durationSec;
+            let benchText = `${kWordsPerSec.toFixed(2)} KWords/sec`;
+
+            // Memory (Chrome/Edge only)
+            if (performance.memory) {
+                const usedMem = performance.memory.usedJSHeapSize / (1024 * 1024);
+                benchText += ` | ${usedMem.toFixed(1)} MB`;
+            }
+
+            const benchEl = document.getElementById('benchmark-display');
+            if (benchEl) {
+                benchEl.textContent = benchText;
+            }
         }
 
-        // Don't push identical states (simple check)
-        const current = this.stack[this.currentIndex];
-        if (current && current.html === state.html) return;
 
-        this.stack.push(state);
-        if (this.stack.length > this.maxSize) {
-            this.stack.shift();
+
+        els.wordCount.textContent = `${wordCount} ពាក្យ`;
+        els.unknownCount.textContent = `${unknownCount} ពាក្យមិនស្គាល់`;
+
+        // Nav Controls
+        if (unknownCount > 0) {
+            els.navControls.style.visibility = 'visible';
+            els.navControls.style.opacity = '1';
         } else {
-            this.currentIndex++;
+            els.navControls.style.visibility = 'hidden';
+            els.navControls.style.opacity = '0';
         }
-    },
 
-    undo() {
-        if (this.currentIndex > 0) {
-            this.currentIndex--;
-            return this.stack[this.currentIndex];
+        if (state.mode === 'edit') {
+            applyHighlights();
         }
-        return null;
-    },
 
-    redo() {
-        if (this.currentIndex < this.stack.length - 1) {
-            this.currentIndex++;
-            return this.stack[this.currentIndex];
-        }
-        return null;
-    },
+        state.currentUnknownIndex = -1;
+        updateNavStatus();
+        updateStatus('រួចរាល់', 'success');
 
-    getCurrentState() {
-        // Capture HTML and caret
-        return {
-            html: editor.innerHTML,
-            caret: getCaretCharacterOffsetWithin(editor),
-            words: currentWords // Cache words to avoid re-segmentation if possible
-        };
+    } catch (e) {
+        console.error(e);
+        state.isSegmenting = false;
+        updateStatus('Error', 'error');
     }
 };
 
-// Initial state
-historyManager.push(historyManager.getCurrentState());
+const debouncedSegmentation = debounce(runSegmentation, 500);
 
-// Helper to get next worker
-function getNextWorker() {
-    const w = workers[nextWorkerIndex];
-    nextWorkerIndex = (nextWorkerIndex + 1) % workerCount;
-    return w;
+// Helper: Map abstract text offsets to DOM Ranges
+// This is the tricky part. We must traverse Text Nodes matching the innerText logic.
+function getAllTextNodes(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    return nodes;
 }
 
-// Handle Editor Input (Debounce for Real-time, Immediate for Paste)
-let typingTimer;
-const doneTypingInterval = 100; // 0.1s debounce for history checkpoints
+function getRangesForUnknowns(root, segments, unknownIndices) {
+    const ranges = [];
+    if (unknownIndices.length === 0) return ranges;
 
-editor.addEventListener('input', (e) => {
-    // Basic stats
-    const text = editor.innerText;
-    // unknownCount.textContent = `...`; // Updated after segmentation
-    // Word count is approx until segmented
+    const textNodes = getAllTextNodes(root);
+    if (textNodes.length === 0) return ranges;
 
-    // Identify typing vs paste (simple heuristic or use inputType)
-    // If inputType is 'insertFromPaste', we might want to trigger full re-segmentation
-    // But for 'insertText', we segement current sentence.
+    let nodeIdx = 0;
+    let charIdx = 0; // Index within the current node
 
-    // For simplicity:
-    // If text ends with '។', segment the last sentence immediately?
-    // "when user start typing, run the sequential segmentatioin in real-time in the current sentence. Use ។ to identify the length of the sentence to process."
+    // We must walk through every segment to keep sync
+    for (let i = 0; i < segments.length; i++) {
+        const segment = segments[i];
+        const segWord = segment.word;
+        if (!segWord) continue;
 
-    // Limitation: ContentEditable HTML structure is messy. Resetting innerHTML ruins cursor position.
-    // Solution: 
-    // 1. We only modify the DOM if we are confident.
-    // 2. Or we just show results in a separate view? 
-    // Request says: "Tex editor have a definite width... draw red underline for all the unknown words"
-    // So we must modify the editor content.
-    // Preserving caret in ContentEditable while modifying HTML is HARD.
+        // Remove the previous "skip newline segment" block. 
+        // We handle it char-by-char now.
 
-    // Strategy:
-    // Only re-render when user pauses typing OR when they finish a sentence (space/punctuation).
-    // Or, use a library? No external libs requested.
+        let segCharIdx = 0;
+        let startNode = null;
+        let startOffset = -1;
+        const isTarget = segment.isUnknown;
 
-    // Let's implement full re-segmentation on PASTE (batch).
-    // Let's implement sentence segmentation on Typing (Real-time).
+        // Console debug for first few and last few segments or purely on mismatch?
+        // Let's log if we have a mismatch to capture the issue.
 
-    // Actually, replacing just the current sentence is tricky without robust DOM diffing.
-    // Simple approach:
-    // On Paste: Block UI, segment all, replace all content.
-    // On Typing: Wait for debounce, then segment.
-
-    // The requirement "Use ។ to identify the length of the sentence to process" implies we should only look at the current sentence.
-
-    clearTimeout(typingTimer);
-    if (e.inputType === 'insertFromPaste') {
-        // Paste event handled separately?
-        // Actually 'paste' event fires before 'input'. 
-        // We can handle 'paste' specifically.
-    } else {
-        // Save state for undo (debounce?)
-        // Ideally we save state BEFORE the input happens? 
-        // But `input` is after. 
-        // We should save state on `beforeinput` or `keydown`?
-        // Or just save snapshots periodically. 
-        // Simple: Save snapshot debounced or on space/enter?
-        // For now, let's save on debounce with typing? 
-
-        // Actually, for "undo", we want the state *result*.
-        // If I type "a", then "undo", I want empty.
-        // If I use `historyManager`, I need to push *new* state.
-
-        // Strategy:
-        // 1. We are modifying DOM programmatically in `renderResult`. This is where we break history.
-        // 2. So we must push to history BEFORE `renderResult` modifies it? 
-        // 3. Or push to history on every `input` event?
-
-        // Let's push to history on debounce of input?
-        // This might miss some chars.
-
-        // Re-think: "Cannot Ctrl-Z when editing".
-        // The programmatic update happens in `renderResult`. 
-        // We should save state there.
-
-        typingTimer = setTimeout(() => {
-            // Save current state to history before segmentation modifies it
-            historyManager.push({
-                html: editor.innerHTML,
-                caret: getCaretCharacterOffsetWithin(editor),
-                words: currentWords
-            });
-
-            // Segmentation disabled in edit mode - only enabled in View mode
-            performRealTimeSegmentation();
-        }, doneTypingInterval);
-    }
-});
-
-editor.addEventListener('keydown', (e) => {
-    // Undo: Ctrl+Z
-    // Redo: Ctrl+Y or Ctrl+Shift+Z
-    if (e.ctrlKey || e.metaKey) {
-        if (e.key === 'z') {
-            e.preventDefault();
-            if (e.shiftKey) {
-                // Redo
-                const state = historyManager.redo();
-                if (state) restoreState(state);
-            } else {
-                // Undo
-                const state = historyManager.undo();
-                if (state) restoreState(state);
+        while (segCharIdx < segWord.length) {
+            if (nodeIdx >= textNodes.length) {
+                // Run out of DOM text?
+                // If we have remaining segment chars that are just newlines, we can ignore them.
+                // If real content, then we have a problem.
+                break;
             }
-        } else if (e.key === 'y') {
-            e.preventDefault();
-            // Redo
-            const state = historyManager.redo();
-            if (state) restoreState(state);
+
+            const node = textNodes[nodeIdx];
+            const nodeVal = node.nodeValue;
+
+            if (charIdx >= nodeVal.length) {
+                // Move to next node
+                nodeIdx++;
+                charIdx = 0;
+                continue;
+            }
+
+            const domChar = nodeVal[charIdx];
+            const segChar = segWord[segCharIdx];
+            const domCC = domChar.charCodeAt(0);
+            const segCC = segChar.charCodeAt(0);
+
+            // 1. Strict Match
+            if (domChar === segChar) {
+                if (isTarget && startNode === null) {
+                    startNode = node;
+                    startOffset = charIdx;
+                }
+                charIdx++;
+                segCharIdx++;
+            }
+            // 2. DOM has invisible junk (ZWSP, or sometimes a newline that segment doesn't have?)
+            // Actually, if segment has newline, and DOM has newline, it matches #1.
+            // If DOM has ZWSP, segment doesn't (normalized).
+            else if (/[\u200b\u200c\u200d]/.test(domChar)) {
+                charIdx++;
+            }
+            // 3. Segment has newline, DOM doesn't (likely <br> or block bound)
+            else if (/[\r\n]/.test(segChar)) {
+                segCharIdx++;
+            }
+            // 4. Mismatch
+            else {
+                // Try to skip DOM char to resync?
+                // This usually implies DOM has extra stuff we dind't expect.
+                // console.warn(`Mismatch: DOM '${domChar.charCodeAt(0)}' vs Seg '${segChar.charCodeAt(0)}'`);
+                charIdx++;
+            }
+        }
+
+        // Close range
+        if (isTarget && startNode) {
+            const range = new Range();
+            range.setStart(startNode, startOffset);
+            range.setEnd(textNodes[nodeIdx], charIdx);
+            ranges.push({ range, index: i });
         }
     }
-});
 
-function restoreState(state) {
-    // Restore HTML
-    editor.innerHTML = state.html;
-    // Restore Words (for stats/nav)
-    currentWords = state.words || [];
-
-    // Restore Caret and Focus synchronously
-    setCaretPosition(editor, state.caret);
-
-    // Ensure focus after setting caret
-    // Use requestAnimationFrame to ensure it happens after browser processes the caret change
-    requestAnimationFrame(() => {
-        editor.focus();
-    });
-
-    // Update Stats
-    updateStats(currentWords);
-    updateUnknownNavigation();
+    return ranges;
 }
 
-editor.addEventListener('paste', (e) => {
-    // Let browser handle paste naturally in edit mode
-    // e.preventDefault();
-    const pastedText = (e.clipboardData || window.clipboardData).getData('text');
-
-    // Get current text and cursor position
-    const currentText = editor.innerText;
-    const caretOffset = getCaretCharacterOffsetWithin(editor);
-
-    // Build combined text: before cursor + pasted text + after cursor
-    // This handles both: pasting into middle of text, and pasting when there's a selection
-    // (getCaretCharacterOffsetWithin returns end of selection if text is selected)
-
-    // We need to handle selection properly
-    const selection = window.getSelection();
-    let insertPosition = caretOffset;
-    let deleteLength = 0;
-
-    if (selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0);
-        if (!range.collapsed) {
-            // There's a selection - we need to replace it
-            const preCaretRange = range.cloneRange();
-            preCaretRange.selectNodeContents(editor);
-            preCaretRange.setEnd(range.startContainer, range.startOffset);
-            insertPosition = preCaretRange.toString().length;
-            deleteLength = range.toString().length;
-        }
-    }
-
-    // Build the new combined text
-    const beforeCursor = currentText.substring(0, insertPosition);
-    const afterCursor = currentText.substring(insertPosition + deleteLength);
-    const newText = beforeCursor + pastedText + afterCursor;
-
-    // Calculate where cursor should be after paste (at end of pasted text)
-    const targetCaretPosition = insertPosition + pastedText.length;
-
-    // Process the combined text and pass the target caret position
-    handlePaste(newText, false, true, targetCaretPosition); // silent=false, fromPaste=true, targetCaret
-});
-
-async function handlePaste(text, silent = false, fromPaste = false, targetCaretPosition = null) {
-    if (!silent) {
-        statusIndicator.textContent = "កំពុងដំណើរការ...";
-        statusIndicator.classList.add("processing");
-    }
-    // editor.innerHTML = ""; // Don't clear! renderResult replaces.
-
-    const lines = text.split('\n');
-    // Distribute lines to workers
-
-    const chunkSize = Math.ceil(lines.length / workerCount);
-    const promises = [];
-
-    for (let i = 0; i < workerCount; i++) {
-        const chunk = lines.slice(i * chunkSize, (i + 1) * chunkSize);
-        // Even empty chunks should be processed to keep order? 
-        // Logic below handles promises.
-        if (chunk.length === 0) continue;
-
-        const chunkText = chunk.join('\n');
-
-        promises.push(new Promise(resolve => {
-            const id = activeRequestId++;
-            const worker = workers[i];
-
-            const handler = (e) => {
-                if (e.data.id === id) {
-                    worker.removeEventListener('message', handler);
-                    resolve(e.data.result);
-                }
-            };
-
-            pendingRequests.set(id, resolve);
-            worker.postMessage({ type: 'segment', text: chunkText, id });
-        }));
-    }
-
-    const results = await Promise.all(promises);
-    // results is array of arrays of word-objects
-
-    // Merge
-    const allWords = results.flat();
-
-    // Check if the content has changed since we started processing
-    // BUT: Skip this check for paste operations, because the text isn't in the editor yet
-    // (we prevented default paste, so editor.innerText is old content, not the pasted text)
-    if (!fromPaste && editor.innerText !== text) {
-        console.log("Content changed during segmentation, skipping render.");
-        // Ensure we reset status even if skipping!
-        if (!silent) {
-            statusIndicator.textContent = "រួចរាល់";
-            statusIndicator.classList.remove("processing");
-        }
+function applyHighlights() {
+    if (!window.CSS || !CSS.highlights) {
+        console.error("CSS Custom Highlight API not supported.");
         return;
     }
 
-    renderResult(allWords, false, targetCaretPosition);
+    const ranges = getRangesForUnknowns(els.editor, state.segmentedResult, state.unknownWords);
 
-    if (!silent) {
-        statusIndicator.textContent = "រួចរាល់";
-        statusIndicator.classList.remove("processing");
-    }
+    // Create Highlight for ALL unknowns
+    const unknownRanges = ranges.map(r => r.range);
+    const unknownHighlight = new Highlight(...unknownRanges);
+    CSS.highlights.set('unknown-word', unknownHighlight);
 
-    // If this was a paste operation, save the result to history
-    // This creates a checkpoint so typing after paste can be undone separately
-    if (fromPaste) {
-        historyManager.push({
-            html: editor.innerHTML,
-            caret: targetCaretPosition !== null ? targetCaretPosition : getCaretCharacterOffsetWithin(editor),
-            words: allWords
-        });
-    }
-}
-
-/* 
-   Pending Request Map
-   ID -> Resolve Function
-*/
-const pendingRequests = new Map();
-
-function handleWorkerResult(id, result) {
-    if (pendingRequests.has(id)) {
-        const resolve = pendingRequests.get(id);
-        pendingRequests.delete(id);
-        resolve(result);
-    }
-}
-
-const modeToggle = document.getElementById('mode-toggle');
-
-// Toggle Mode
-modeToggle.addEventListener('change', (e) => {
-    isViewMode = e.target.checked;
-
-    if (isViewMode) {
-        // Capture text from Edit Mode BEFORE applying View Mode styles (which makes spans flex items)
-        // This prevents innerText from inserting newlines between words due to flex layout
-        const currentText = editor.innerText;
-
-        editor.contentEditable = "false";
-        editor.classList.add("view-mode");
-        // Ensure we segment fresh content when entering view mode
-        performRealTimeSegmentation(currentText);
+    // Current Nav Highlight
+    if (state.currentUnknownIndex !== -1) {
+        // Find the range that corresponds to this index
+        const match = ranges.find(r => r.index === state.currentUnknownIndex);
+        if (match) {
+            const navHighlight = new Highlight(match.range);
+            CSS.highlights.set('current-nav', navHighlight);
+        } else {
+            CSS.highlights.delete('current-nav');
+        }
     } else {
-        editor.contentEditable = "true";
-        editor.classList.remove("view-mode");
+        CSS.highlights.delete('current-nav');
     }
+}
 
-    // Re-render with new style
-    renderResult(currentWords, true); // Force update
+
+// Handlers
+els.editor.addEventListener('input', () => {
+    if (state.mode === 'edit') {
+        debouncedSegmentation();
+    }
 });
 
-// Force reset to Editable Mode on load (User Request)
-modeToggle.checked = false;
-isViewMode = false;
-editor.contentEditable = "true";
-editor.classList.remove("view-mode");
-
-function renderResult(words, force = false, targetCaretPosition = null) {
-    currentWords = words; // Update cache
-
-    // Convert words to HTML spans
-    const html = words.map(w => {
-        // Handle newlines - strictly check for newline characters
-        if (/^[\r\n]+$/.test(w.word)) return '<br>';
-
-        let spanClass = '';
-        // Only mark as unknown if it has non-whitespace content
-        const isUnknown = w.isUnknown && w.word.trim().length > 0;
-
-        if (isViewMode) {
-            spanClass = 'segment-box';
-            if (isUnknown) spanClass += ' unknown-box';
-        } else {
-            if (isUnknown) spanClass = 'unknown-word';
-        }
-
-        if (spanClass) {
-            return `<span class="${spanClass}">${escapeHtml(w.word)}</span>`;
-        } else {
-            return `<span>${escapeHtml(w.word)}</span>`;
-        }
-    }).join('');
-
-    // Only update if changed or forced
-    if (editor.innerHTML !== html || force) {
-        // If switching to View Mode, we don't need to save caret (not editable)
-        // If switching to Edit Mode, we place caret at end or try to restore?
-
-        if (!isViewMode && !force) {
-            // If we have a target caret position (from paste), use it
-            // Otherwise, save and restore current position
-            const savedCaret = targetCaretPosition !== null ? targetCaretPosition : getCaretCharacterOffsetWithin(editor);
-
-            // Fix for placeholder: contenteditable often has a phantom <br> or \n when "empty".
-            // If the result is a single <br>, clear it to "" so CSS :empty works.
-            // Note: If user types "Enter", we usually get multiple newlines or diff structure, so this shouldn't prevent typing newlines.
-            if (html === '<br>') {
-                editor.innerHTML = '';
-            } else {
-                editor.innerHTML = html;
-            }
-
-            setCaretPosition(editor, savedCaret);
-
-            // Don't push to history here - we push before segmentation in the input handler
-            // This prevents creating history entries when segmentation completes after user has already undone
-        } else {
-            if (html === '<br>') {
-                editor.innerHTML = '';
-            } else {
-                editor.innerHTML = html;
-            }
-            if (!isViewMode) {
-                placeCaretAtEnd(editor);
-            }
-        }
+els.editor.addEventListener('paste', (e) => {
+    if (state.mode === 'edit') {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData('text');
+        document.execCommand('insertText', false, text);
     }
+});
 
-    updateStats(words);
-    updateUnknownNavigation();
-}
+// Sync paragraph separator
+document.execCommand('defaultParagraphSeparator', false, 'br');
 
-// Unknown Word Navigation
-const btnPrevUnknown = document.getElementById('btn-prev-unknown');
-const btnNextUnknown = document.getElementById('btn-next-unknown');
-const navControls = document.getElementById('nav-controls');
-const navStatus = document.getElementById('nav-status');
+els.modeToggle.addEventListener('change', (e) => {
+    const isViewMode = e.target.checked;
+    state.mode = isViewMode ? 'view' : 'edit';
 
-let currentUnknownIndex = -1;
-let unknownElements = [];
+    if (state.mode === 'view') {
+        // Clear Highlights in view mode (optional, but good practice)
+        CSS.highlights.clear();
 
-function updateUnknownNavigation() {
-    // Find all unknown elements
-    unknownElements = Array.from(editor.querySelectorAll('.unknown-word, .unknown-box'));
-
-    if (unknownElements.length > 0) {
-        navControls.style.visibility = 'visible';
-        navControls.style.opacity = '1';
-        btnPrevUnknown.disabled = false;
-        btnNextUnknown.disabled = false;
-
-        // Reset index if out of bounds or invalid
-        if (currentUnknownIndex >= unknownElements.length || currentUnknownIndex < 0) {
-            currentUnknownIndex = -1;
-            navStatus.textContent = `${0}/${unknownElements.length}`;
+        if (els.editor.innerText !== state.lastSegmentedText) {
+            updateStatus('Finalizing...', 'warning');
+            runSegmentation().then(renderViewMode);
         } else {
-            // Keep current index, update status
-            navStatus.textContent = `${currentUnknownIndex + 1}/${unknownElements.length}`;
-            highlightCurrentUnknown();
+            renderViewMode();
         }
     } else {
-        navControls.style.visibility = 'hidden';
-        navControls.style.opacity = '0';
-        currentUnknownIndex = -1;
+        renderEditMode();
     }
+});
+
+function renderViewMode() {
+    els.editor.contentEditable = false;
+    els.editor.classList.add('view-mode');
+
+    let html = '';
+    state.segmentedResult.forEach((item, index) => {
+        const cls = item.isUnknown ? 'segment-box unknown-box' : 'segment-box';
+        const safeWord = item.word.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        html += `<span class="${cls}" data-index="${index}">${safeWord}</span>`;
+    });
+    els.editor.innerHTML = html;
 }
 
-function jumpToUnknown(direction) {
-    if (unknownElements.length === 0) return;
+function renderEditMode() {
+    els.editor.contentEditable = true;
+    els.editor.classList.remove('view-mode');
+    els.editor.innerText = state.lastSegmentedText;
+    applyHighlights();
+}
+
+// Nav
+function updateNavStatus() {
+    const total = state.unknownWords.length;
+    let current = 0;
+    if (state.currentUnknownIndex !== -1) {
+        const idx = state.unknownWords.indexOf(state.currentUnknownIndex);
+        if (idx !== -1) current = idx + 1;
+    }
+    els.navStatus.textContent = `${current}/${total}`;
+}
+
+function scrollToUnknown(direction) {
+    if (state.unknownWords.length === 0) return;
+
+    let currentArrayIdx = state.unknownWords.indexOf(state.currentUnknownIndex);
 
     if (direction === 'next') {
-        currentUnknownIndex++;
-        if (currentUnknownIndex >= unknownElements.length) currentUnknownIndex = 0; // Cycle
+        currentArrayIdx++;
+        if (currentArrayIdx >= state.unknownWords.length) currentArrayIdx = 0;
     } else {
-        currentUnknownIndex--;
-        if (currentUnknownIndex < 0) currentUnknownIndex = unknownElements.length - 1; // Cycle
+        currentArrayIdx--;
+        if (currentArrayIdx < 0) currentArrayIdx = state.unknownWords.length - 1;
     }
 
-    highlightCurrentUnknown();
-    navStatus.textContent = `${currentUnknownIndex + 1}/${unknownElements.length}`;
-}
+    const resultIndex = state.unknownWords[currentArrayIdx];
+    state.currentUnknownIndex = resultIndex;
 
-function highlightCurrentUnknown() {
-    // Remove previous highlights
-    unknownElements.forEach(el => el.classList.remove('current-highlight'));
+    if (state.mode === 'view') {
+        const span = els.editor.querySelector(`span[data-index="${resultIndex}"]`);
+        if (span) {
+            // span.scrollIntoView({ behavior: 'smooth', block: 'center' }); // Causes whole page scroll
 
-    const el = unknownElements[currentUnknownIndex];
-    if (el) {
-        el.classList.add('current-highlight');
+            // Manual scroll calculation for View Mode
+            const spanRect = span.getBoundingClientRect();
+            const editorRect = els.editor.getBoundingClientRect();
 
-        // Manual scroll to avoid scrolling the whole page (browser window)
-        const editorHeight = editor.clientHeight;
-        const elTop = el.offsetTop;
-        const elHeight = el.offsetHeight;
+            const relativeTop = spanRect.top - editorRect.top + els.editor.scrollTop;
+            const containerHeight = els.editor.clientHeight;
 
-        editor.scrollTo({
-            top: elTop - (editorHeight / 2) + (elHeight / 2),
-            behavior: 'smooth'
-        });
+            els.editor.scrollTo({
+                top: relativeTop - (containerHeight / 2) + (spanRect.height / 2),
+                behavior: 'smooth'
+            });
 
-        // Don't select text in edit mode - it interferes with typing
-        // In view mode, selection is fine since editor is not editable
-        // Commenting out for now - the CSS highlight is sufficient
-        /*
-        if (!isViewMode) {
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            const sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(range);
+            document.querySelectorAll('.current-highlight').forEach(el => el.classList.remove('current-highlight'));
+            span.classList.add('current-highlight');
         }
-        */
-    }
-}
-
-btnPrevUnknown.addEventListener('click', () => jumpToUnknown('prev'));
-btnNextUnknown.addEventListener('click', () => jumpToUnknown('next'));
-
-function updateStats(words) {
-    const wCount = words.filter(w => w.word.trim().length > 0).length;
-    const uCount = words.filter(w => w.isUnknown && w.word.trim().length > 0).length;
-    wordCount.textContent = `${wCount} ពាក្យ`;
-    unknownCount.textContent = `${uCount} ពាក្យមិនស្គាល់`;
-
-    if (uCount > 0) {
-        unknownCount.style.color = 'var(--danger)';
     } else {
-        unknownCount.style.color = 'var(--text-secondary)';
-    }
-}
+        // Edit Mode Highlight API
+        applyHighlights(); // Update 'current-nav' highlight
 
-function escapeHtml(text) {
-    return text.replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
+        // Scroll to range
+        // We need to re-find the range object to get rect
+        const ranges = getRangesForUnknowns(els.editor, state.segmentedResult, state.unknownWords);
+        const match = ranges.find(r => r.index === resultIndex);
 
-function getCaretCharacterOffsetWithin(element) {
-    let caretOffset = 0;
-    const doc = element.ownerDocument || element.document;
-    const win = doc.defaultView || doc.parentWindow;
-    const sel = win.getSelection();
+        if (match) {
+            const rect = match.range.getBoundingClientRect();
+            const editorRect = els.editor.getBoundingClientRect();
 
-    if (sel.rangeCount > 0) {
-        const range = sel.getRangeAt(0);
-        const preCaretRange = range.cloneRange();
-        preCaretRange.selectNodeContents(element);
-        preCaretRange.setEnd(range.endContainer, range.endOffset);
-        caretOffset = preCaretRange.toString().length;
-    }
-    return caretOffset;
-}
+            // Absolute scroll calculation
+            // scrollTop of editor = how much we scrolled down.
+            // rect.top is relative to viewport.
+            // We want element to be in middle of editor.
 
-function setCaretPosition(element, offset) {
-    const createRange = (node, chars, range) => {
-        if (!range) {
-            range = document.createRange();
-            range.selectNode(node);
-            range.setStart(node, 0);
-        }
+            const relativeTop = rect.top - editorRect.top + els.editor.scrollTop;
+            const containerHeight = els.editor.clientHeight;
 
-        if (chars.count === 0) {
-            range.setEnd(node, chars.count);
-        }
-
-        if (node && chars.count > 0) {
-            if (node.nodeType === Node.TEXT_NODE) {
-                if (node.textContent.length < chars.count) {
-                    chars.count -= node.textContent.length;
-                } else {
-                    range.setEnd(node, chars.count);
-                    chars.count = 0;
-                }
-            } else {
-                for (let lp = 0; lp < node.childNodes.length; lp++) {
-                    range = createRange(node.childNodes[lp], chars, range);
-                    if (chars.count === 0) {
-                        break;
-                    }
-                }
-            }
-        }
-        return range;
-    };
-
-    if (offset >= 0) {
-        const selection = window.getSelection();
-        const range = createRange(element, { count: offset });
-        if (range) {
-            range.collapse(false);
-            selection.removeAllRanges();
-            selection.addRange(range);
+            els.editor.scrollTo({
+                top: relativeTop - (containerHeight / 2) + (rect.height / 2),
+                behavior: 'smooth'
+            });
         }
     }
+    updateNavStatus();
 }
 
+els.btnNext.addEventListener('click', () => scrollToUnknown('next'));
+els.btnPrev.addEventListener('click', () => scrollToUnknown('prev'));
 
-// Real-time Segmentation
-async function performRealTimeSegmentation(textOverride = null) {
-    // Real-time: use single worker only, NOT batch mode (which uses 4 workers)
-    const fullText = textOverride !== null ? textOverride : editor.innerText;
+// Initial
+state.editText = els.editor.innerText;
 
-    // Use a single worker for lighter processing
-    const worker = getNextWorker();
-    const id = activeRequestId++;
+// Force BR for newlines to match backdrop pre-wrap behavior better than P/DIV
+document.execCommand('defaultParagraphSeparator', false, 'br');
 
-    const result = await new Promise(resolve => {
-        pendingRequests.set(id, resolve);
-        worker.postMessage({ type: 'segment', text: fullText, id });
-    });
+// Download Handler
+els.btnDownload.addEventListener('click', () => {
+    if (state.segmentedResult.length === 0) return;
 
-    // Check if content changed during segmentation (stale check)
-    if (editor.innerText !== fullText) {
-        return; // Skip render if user kept typing
-    }
+    // Format: word1 | word 2 | word 3
+    const textContent = state.segmentedResult
+        .map(s => s.word)
+        .filter(w => w && !/^[\s\r\n]*$/.test(w)) // Filter out whitespace-only segments
+        .join(' | ');
 
-    renderResult(result);
-}
-
-
-// Download
-btnDownload.addEventListener('click', () => {
-    const text = editor.innerText; // Plain text
-    // Or do they want the segmented result? 
-    // "segmentation results as text" -> Usually delimited? 
-    // Let's assume pipe delimited | or just spaces (Khmer uses space for separation in segmentation output usually).
-    // Or just zero-width space?
-    // Let's ask segmenter output.
-    // The segmenter adds NO delimiters by default, it just returns array.
-    // "Download segmentation results" -> user probably wants explicit visibility, e.g. separated by | or space.
-    // I will use `|` as separator for visibility.
-
-    // We need to re-segment to get the array if we only have DOM.
-    // Actually we have the DOM `span`s.
-
-    const spans = editor.querySelectorAll('span');
-    const words = Array.from(spans).map(s => s.textContent);
-    const content = words.join('|');
-
-    const blob = new Blob([content], { type: 'text/plain' });
+    const blob = new Blob([textContent], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = 'segmentation_result.txt';
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
 });
+
