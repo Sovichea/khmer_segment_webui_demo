@@ -470,38 +470,6 @@ export class KhmerSegmenter {
         const finalSegments = [];
         let unknownBuffer = [];
 
-        // Check unknown status for red underline - wait for UI logic??
-        // The segmenter just returns segments. 
-        // We will add a method or property to check if a word is unknown.
-        // But for standard output, we just return the list.
-        // We can create a method `segmentWithUnknowns` later if needed? -> Actually user wants red underline.
-        // The request says "draw red underline for all the unknown words".
-        // The current segmenter merges unknowns...
-
-        // Let's modify logic:
-        // Current logic:
-        /*
-        for (const seg of pass2Segments) {
-            let isKnown = false;
-             ... checks ...
-            if (isKnown) {
-                if (unknownBuffer.length > 0) {
-                    finalSegments.push(unknownBuffer.join(""));
-                    unknownBuffer = [];
-                }
-                finalSegments.push(seg);
-            } else {
-                unknownBuffer.push(seg);
-            }
-        }
-        */
-        // This merging DESTROYS the info of what was unknown if we merge them into one block.
-        // But maybe that's what we want? "Unknown words" -> usually we group unknown chars into one "unknown word".
-        // Yes. So if I return a list of words, I can check each word against the dictionary in the UI to decide to underline.
-        // That requires the UI to have the dictionary too? Or I can return objects: { text: "...", method: "dict"|"unknown" }
-        // The current `segment` return array of strings.
-        // I will keep it returning array of strings, and add `isUnknown(word)` method to the class for the UI to use.
-
         for (const seg of pass2Segments) {
             let isKnown = false;
             // Check known status
