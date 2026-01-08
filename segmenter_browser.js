@@ -516,6 +516,19 @@ export class KhmerSegmenter {
         if (this._isSeparator(word)) return false;
         if (word.length === 1 && this._isValidSingleBaseChar(word)) return false;
         if (word.includes('.') && word.length >= 2) return false;
+
+        // Check if word contains any Khmer character
+        // If it contains NO Khmer characters (e.g. English, Chinese), treat as "known"
+        // so it doesn't get red underlined.
+        let hasKhmer = false;
+        for (let i = 0; i < word.length; i++) {
+            if (this._isKhmerChar(word[i])) {
+                hasKhmer = true;
+                break;
+            }
+        }
+        if (!hasKhmer) return false;
+
         /*
           NOTE: If we merged multiple unknown segments into one (e.g. "ABC"), the combined "ABC" is definitely unknown.
         */
